@@ -1,0 +1,90 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Product {
+  id         String   @id @default(cuid())
+  name       String
+  category   String   // "Pupuk" | "Obat"
+  unit       String   // "sak" | "ml" | "liter" | "kg"
+  costPrice  Int
+  sellPrice  Int
+  stockQty   Int      @default(0)
+  expiryDate DateTime?
+  imageUrl   String?
+  minStock   Int      @default(5)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  items      SaleItem[]
+  moves      StockMovement[]
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String?
+  address   String?
+  notes     String?
+  createdAt DateTime @default(now())
+  sales     Sale[]
+}
+
+model Sale {
+  id            String    @id @default(cuid())
+  invoiceNo     String    @unique
+  customerId    String?
+  customer      Customer? @relation(fields: [customerId], references: [id])
+  date          DateTime  @default(now())
+  grandTotal    Int
+  amountPaid    Int       @default(0)
+  paymentStatus String    // "Piutang" | "Sebagian" | "Lunas"
+  note          String?
+  createdAt     DateTime  @default(now())
+  items         SaleItem[]
+  payments      Payment[]
+}
+
+model SaleItem {
+  id         String  @id @default(cuid())
+  saleId     String
+  productId  String
+  qty        Int
+  unitPrice  Int
+  lineTotal  Int
+  sale       Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product    Product @relation(fields: [productId], references: [id])
+}
+
+model Payment {
+  id        String   @id @default(cuid())
+  saleId    String
+  sale      Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  date      DateTime @default(now())
+  amount    Int
+  method    String   // "Tunai" | "Transfer" | "QRIS"
+  refNo     String?
+  createdAt DateTime @default(now())
+}
+
+model StockMovement {
+  id        String   @id @default(cuid())
+  productId String
+  type      String   // "IN" | "OUT" | "ADJUST"
+  qty       Int
+  reason    String   // "Sale" | "Adjust" | ...
+  refId     String?
+  date      DateTime @default(now())
+  userId    String?
+  product   Product  @relation(fields: [productId], references: [id])
+}
