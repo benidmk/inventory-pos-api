@@ -9,12 +9,7 @@ const { PrismaClient } = pkg;
 const app = express();
 const prisma = new PrismaClient();
 
-app.use(
-  cors({
-    origin: process.env.ALLOWED_ORIGIN?.split(",") ?? true,
-    credentials: true,
-  })
-);
+app.use(cors());
 app.use(express.json());
 
 app.get("/api/v1/health", (_req, res) => res.json({ ok: true }));
