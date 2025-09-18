@@ -10,10 +10,8 @@ const { PrismaClient } = pkg;
 const prisma = new PrismaClient();
 const app = express();
 
-/**
- * CORS
- * Sementara izinkan semua origin agar frontend lokal & vercel mudah akses.
- * Kalau mau dibatasi: ganti ke baris di bawah (dan set env ALLOWED_ORIGIN).
+/** CORS
+ * Untuk dev/awal produksi, izinkan semua. Nanti bisa dibatasi pakai ALLOWED_ORIGIN.
  */
 // app.use(cors({ origin: process.env.ALLOWED_ORIGIN?.split(',') ?? true, credentials: true }));
 app.use(cors());
@@ -22,8 +20,7 @@ app.use(express.json());
 /** Healthcheck */
 app.get("/api/v1/health", (_req, res) => res.json({ ok: true }));
 
-/** ========== AUTH ========== */
-/** Login sangat sederhana: cocok dengan ADMIN_PASSWORD lalu kirim JWT. */
+/* ================= AUTH ================= */
 app.post("/api/v1/auth/login", (req, res) => {
   const { password } = req.body || {};
   if (!password || password !== process.env.ADMIN_PASSWORD) {
@@ -35,7 +32,6 @@ app.post("/api/v1/auth/login", (req, res) => {
   res.json({ token });
 });
 
-/** Middleware JWT */
 function auth(req, res, next) {
   const h = req.headers.authorization || "";
   const token = h.startsWith("Bearer ") ? h.slice(7) : null;
@@ -48,8 +44,7 @@ function auth(req, res, next) {
   }
 }
 
-/** ========== PRODUCTS ========== */
-/** List (+search) */
+/* ================= PRODUCTS ================= */
 app.get("/api/v1/products", auth, async (req, res) => {
   const q = (req.query.q || "").toString().toLowerCase();
   const list = await prisma.product.findMany({
@@ -61,7 +56,6 @@ app.get("/api/v1/products", auth, async (req, res) => {
   res.json(filtered);
 });
 
-/** Create */
 app.post("/api/v1/products", auth, async (req, res) => {
   const schema = z.object({
     name: z.string().min(1),
@@ -89,7 +83,6 @@ app.post("/api/v1/products", auth, async (req, res) => {
   }
 });
 
-/** Update */
 app.put("/api/v1/products/:id", auth, async (req, res) => {
   try {
     const id = req.params.id;
@@ -105,7 +98,6 @@ app.put("/api/v1/products/:id", auth, async (req, res) => {
   }
 });
 
-/** Delete */
 app.delete("/api/v1/products/:id", auth, async (req, res) => {
   try {
     await prisma.product.delete({ where: { id: req.params.id } });
@@ -115,7 +107,47 @@ app.delete("/api/v1/products/:id", auth, async (req, res) => {
   }
 });
 
-/** ========== CUSTOMERS ========== */
+/** Tambah stok (barang masuk) — tidak mengubah costPrice/expiry produk */
+app.post("/api/v1/products/:id/add-stock", auth, async (req, res) => {
+  const schema = z.object({
+    qty: z.number().int().positive(),
+    unitCost: z.number().int().nonnegative().optional(), // bisa kosong
+    note: z.string().optional().nullable(),
+  });
+
+  try {
+    const { qty, unitCost, note } = schema.parse(req.body);
+    const productId = req.params.id;
+
+    const prod = await prisma.product.findUnique({ where: { id: productId } });
+    if (!prod) return res.status(404).json({ error: "Produk tidak ditemukan" });
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const p = await tx.product.update({
+        where: { id: productId },
+        data: { stockQty: { increment: qty } },
+      });
+      await tx.stockMovement.create({
+        data: {
+          productId,
+          type: "IN",
+          qty,
+          reason: "StockIn",
+          userId: "admin",
+          unitCost: typeof unitCost === "number" ? unitCost : null,
+          note: note ?? null,
+        },
+      });
+      return p;
+    });
+
+    res.json(updated);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+/* ================= CUSTOMERS ================= */
 app.get("/api/v1/customers", auth, async (_req, res) => {
   const customers = await prisma.customer.findMany({
     orderBy: { createdAt: "desc" },
@@ -155,13 +187,13 @@ app.put("/api/v1/customers/:id", auth, async (req, res) => {
 app.delete("/api/v1/customers/:id", auth, async (req, res) => {
   try {
     await prisma.customer.delete({ where: { id: req.params.id } });
-    res.json({ ok: true });
   } catch (e) {
-    res.status(400).json({ error: e.message });
+    return res.status(400).json({ error: e.message });
   }
+  res.json({ ok: true });
 });
 
-/** ========== SALES / POS ========== */
+/* ================= SALES / POS ================= */
 app.post("/api/v1/sales", auth, async (req, res) => {
   const schema = z.object({
     customerId: z.string().optional().nullable(),
@@ -176,7 +208,6 @@ app.post("/api/v1/sales", auth, async (req, res) => {
   try {
     const payload = schema.parse(req.body);
 
-    // Ambil produk yang terlibat
     const ids = payload.items.map((i) => i.productId);
     const products = await prisma.product.findMany({
       where: { id: { in: ids } },
@@ -184,13 +215,12 @@ app.post("/api/v1/sales", auth, async (req, res) => {
     if (products.length !== ids.length)
       throw new Error("Produk tidak ditemukan.");
 
-    // Hitung total + validasi stok
     const calcItems = payload.items.map((i) => {
       const p = products.find((pp) => pp.id === i.productId);
       if (!p) throw new Error("Produk tidak ditemukan.");
       if (p.stockQty < i.qty) throw new Error(`Stok tidak cukup: ${p.name}`);
       const unitPrice = p.sellPrice;
-      return { ...i, name: p.name, unitPrice, lineTotal: unitPrice * i.qty };
+      return { ...i, unitPrice, lineTotal: unitPrice * i.qty };
     });
     const grandTotal = calcItems.reduce((a, i) => a + i.lineTotal, 0);
     const status =
@@ -200,7 +230,6 @@ app.post("/api/v1/sales", auth, async (req, res) => {
         ? "Sebagian"
         : "Piutang";
 
-    // Generate nomor invoice: INV-YYYYMM-####
     const now = new Date();
     const prefix = `INV-${now.getFullYear()}${String(
       now.getMonth() + 1
@@ -230,7 +259,6 @@ app.post("/api/v1/sales", auth, async (req, res) => {
         },
       });
 
-      // Kurangi stok + catat movement
       for (const i of calcItems) {
         await tx.product.update({
           where: { id: i.productId },
@@ -248,7 +276,6 @@ app.post("/api/v1/sales", auth, async (req, res) => {
         });
       }
 
-      // Pembayaran awal, bila ada
       if (payload.amountPaid > 0) {
         await tx.payment.create({
           data: {
@@ -268,7 +295,6 @@ app.post("/api/v1/sales", auth, async (req, res) => {
   }
 });
 
-/** List sales (filter status) – open = Piutang/Sebagian; else Lunas */
 app.get("/api/v1/sales", auth, async (req, res) => {
   const status = req.query.status?.toString();
   const where = status
@@ -283,90 +309,7 @@ app.get("/api/v1/sales", auth, async (req, res) => {
   res.json(sales);
 });
 
-// Tambah stok barang (barang masuk)
-app.post("/api/v1/products/:id/add-stock", auth, async (req, res) => {
-  const schema = z.object({
-    qty: z.number().int().positive(),
-    unitCost: z.number().int().nonnegative().optional(), // boleh kosong
-    note: z.string().optional().nullable(),
-  });
-
-  try {
-    const { qty, unitCost, note } = schema.parse(req.body);
-    const productId = req.params.id;
-
-    // pastikan produk ada
-    const prod = await prisma.product.findUnique({ where: { id: productId } });
-    if (!prod) return res.status(404).json({ error: "Produk tidak ditemukan" });
-
-    const updated = await prisma.$transaction(async (tx) => {
-      const p = await tx.product.update({
-        where: { id: productId },
-        data: { stockQty: { increment: qty } }, // hanya tambah stok
-      });
-      await tx.stockMovement.create({
-        data: {
-          productId,
-          type: "IN",
-          qty,
-          reason: "StockIn",
-          userId: "admin",
-          unitCost: typeof unitCost === "number" ? unitCost : null,
-          note: note ?? null,
-        },
-      });
-      return p;
-    });
-
-    res.json(updated);
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-// Laporan barang masuk (stock-in)
-app.get("/api/v1/reports/stock-in", auth, async (req, res) => {
-  try {
-    const fromStr = (req.query.from || "").toString(); // 'YYYY-MM-DD'
-    const toStr = (req.query.to || "").toString();
-
-    const now = new Date();
-    const defaultFrom = new Date(now);
-    defaultFrom.setDate(defaultFrom.getDate() - 30);
-    defaultFrom.setHours(0, 0, 0, 0);
-
-    const from = fromStr ? new Date(`${fromStr}T00:00:00.000Z`) : defaultFrom;
-    const to = toStr
-      ? new Date(`${toStr}T23:59:59.999Z`)
-      : new Date(new Date().setHours(23, 59, 59, 999));
-
-    const list = await prisma.stockMovement.findMany({
-      where: { type: "IN", date: { gte: from, lte: to } },
-      include: { product: true },
-      orderBy: { date: "desc" },
-    });
-
-    const totalQty = list.reduce((a, m) => a + m.qty, 0);
-    const totalValue = list.reduce((a, m) => a + (m.unitCost ?? 0) * m.qty, 0);
-
-    const data = list.map((m) => ({
-      id: m.id,
-      date: m.date,
-      productId: m.productId,
-      productName: m.product.name,
-      qty: m.qty,
-      unitCost: m.unitCost ?? 0,
-      value: (m.unitCost ?? 0) * m.qty,
-      note: m.note || "",
-    }));
-
-    res.json({ totalQty, totalValue, list: data });
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-/** ========== PAYMENTS ========== */
+/* ================= PAYMENTS ================= */
 app.post("/api/v1/payments", auth, async (req, res) => {
   const schema = z.object({
     saleId: z.string(),
@@ -405,15 +348,11 @@ app.post("/api/v1/payments", auth, async (req, res) => {
   }
 });
 
-/** ========== REPORTS ========== */
-/**
- * Perbaikan penting:
- * - Default: 30 hari terakhir
- * - "to" diset ke jam 23:59:59.999 agar transaksi di hari 'to' ikut terbaca.
- */
+/* ================= REPORTS ================= */
+/** Penjualan: default 30 hari, to = 23:59:59.999 */
 app.get("/api/v1/reports/sales", auth, async (req, res) => {
   try {
-    const fromStr = (req.query.from || "").toString(); // 'YYYY-MM-DD'
+    const fromStr = (req.query.from || "").toString();
     const toStr = (req.query.to || "").toString();
 
     const now = new Date();
@@ -422,7 +361,6 @@ app.get("/api/v1/reports/sales", auth, async (req, res) => {
     defaultFrom.setHours(0, 0, 0, 0);
 
     const from = fromStr ? new Date(`${fromStr}T00:00:00.000Z`) : defaultFrom;
-
     const to = toStr
       ? new Date(`${toStr}T23:59:59.999Z`)
       : new Date(new Date().setHours(23, 59, 59, 999));
@@ -438,10 +376,10 @@ app.get("/api/v1/reports/sales", auth, async (req, res) => {
   }
 });
 
-// Laporan barang masuk (stock-in)
+/** Barang Masuk (Stock IN): ringkasan & detail */
 app.get("/api/v1/reports/stock-in", auth, async (req, res) => {
   try {
-    const fromStr = (req.query.from || "").toString(); // 'YYYY-MM-DD'
+    const fromStr = (req.query.from || "").toString();
     const toStr = (req.query.to || "").toString();
 
     const now = new Date();
@@ -480,6 +418,6 @@ app.get("/api/v1/reports/stock-in", auth, async (req, res) => {
   }
 });
 
-/** ========== START SERVER ========== */
+/* ================= START ================= */
 const port = process.env.PORT || 8080;
 app.listen(port, () => console.log("API running on :" + port));
