@@ -33,7 +33,17 @@ app.get("/api/v1/health", (_req, res) => res.json({ ok: true }));
 /* ============== AUTH ============== */
 app.post("/api/v1/auth/login", (req, res) => {
   const { password } = req.body || {};
-  if (!password || password !== process.env.ADMIN_PASSWORD) {
+  const ADMIN = (process.env.ADMIN_PASSWORD ?? "").trim();
+  const EXPECTED = ADMIN || "admin123"; // <-- fallback sementara
+
+  // log aman (tanpa bocorin password)
+  console.log("[LOGIN]", {
+    bodyLen: (password || "").length,
+    envSet: !!ADMIN,
+    envLen: ADMIN.length,
+  });
+
+  if (!password || password !== EXPECTED) {
     return res.status(401).json({ error: "Invalid password" });
   }
   if (!process.env.JWT_SECRET) {
