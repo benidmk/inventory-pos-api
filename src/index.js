@@ -59,6 +59,17 @@ app.post("/api/v1/auth/login", (req, res) => {
   res.json({ token });
 });
 
+app.get("/api/v1/_debug/env", (_req, res) => {
+  const ADMIN = String(process.env.ADMIN_PASSWORD ?? "");
+  const SECRET = String(process.env.JWT_SECRET ?? "");
+  res.json({
+    adminSet: ADMIN.length > 0,
+    adminLen: ADMIN.length,
+    secretSet: SECRET.length > 0,
+    secretLen: SECRET.length,
+  });
+});
+
 function auth(req, res, next) {
   const h = req.headers.authorization || "";
   const token = h.startsWith("Bearer ") ? h.slice(7) : null;
