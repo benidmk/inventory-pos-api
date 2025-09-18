@@ -1,28 +1,4 @@
 // src/index.js
-
-import cors from "cors";
-
-// whitelist origin produksi + lokal
-const allowedOrigins = ["https://bumdesma.vercel.app", "http://localhost:5173"];
-
-app.use(
-  cors({
-    origin(origin, cb) {
-      // allow non-browser tools (curl/postman) tanpa Origin
-      if (!origin) return cb(null, true);
-      if (allowedOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error("Not allowed by CORS"), false);
-    },
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: false, // kita tidak pakai cookie/sesi
-    optionsSuccessStatus: 204, // agar preflight aman
-  })
-);
-
-// pastikan preflight OPTIONS di-handle
-app.options("*", cors());
-
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
@@ -34,21 +10,43 @@ const { PrismaClient } = pkg;
 const prisma = new PrismaClient();
 const app = express();
 
-/** CORS
- * Untuk dev/awal produksi, izinkan semua. Nanti bisa dibatasi pakai ALLOWED_ORIGIN.
- */
-// app.use(cors({ origin: process.env.ALLOWED_ORIGIN?.split(',') ?? true, credentials: true }));
-app.use(cors());
+/* ============== CORS (whitelist Vercel + lokal) ============== */
+const allowedOrigins = ["https://bumdesma.vercel.app", "http://localhost:5173"];
+
+app.use(
+  cors({
+    origin(origin, cb) {
+      // Allow tools tanpa Origin (curl/postman)
+      if (!origin) return cb(null, true);
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+      return cb(new Error("Not allowed by CORS"));
+    },
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: false,
+    optionsSuccessStatus: 204,
+  })
+);
+
+// Preflight handler (OPTIONS)
+app.options("*", cors());
+
+/* ============== Body Parser ============== */
 app.use(express.json());
 
-/** Healthcheck */
+/* ============== Healthcheck ============== */
 app.get("/api/v1/health", (_req, res) => res.json({ ok: true }));
 
-/* ================= AUTH ================= */
+/* ============== AUTH ============== */
 app.post("/api/v1/auth/login", (req, res) => {
   const { password } = req.body || {};
   if (!password || password !== process.env.ADMIN_PASSWORD) {
     return res.status(401).json({ error: "Invalid password" });
+  }
+  if (!process.env.JWT_SECRET) {
+    return res
+      .status(500)
+      .json({ error: "Server misconfigured: JWT_SECRET missing" });
   }
   const token = jwt.sign({ role: "admin" }, process.env.JWT_SECRET, {
     expiresIn: "12h",
@@ -68,16 +66,13 @@ function auth(req, res, next) {
   }
 }
 
-/* ================= PRODUCTS ================= */
+/* ============== PRODUCTS ============== */
 app.get("/api/v1/products", auth, async (req, res) => {
   const q = (req.query.q || "").toString().toLowerCase();
   const list = await prisma.product.findMany({
     orderBy: { createdAt: "desc" },
   });
-  const filtered = q
-    ? list.filter((p) => p.name.toLowerCase().includes(q))
-    : list;
-  res.json(filtered);
+  res.json(q ? list.filter((p) => p.name.toLowerCase().includes(q)) : list);
 });
 
 app.post("/api/v1/products", auth, async (req, res) => {
@@ -110,7 +105,7 @@ app.post("/api/v1/products", auth, async (req, res) => {
 app.put("/api/v1/products/:id", auth, async (req, res) => {
   try {
     const id = req.params.id;
-    const payload = req.body || {};
+    const payload = { ...req.body };
     if (payload.expiryDate) payload.expiryDate = new Date(payload.expiryDate);
     const updated = await prisma.product.update({
       where: { id },
@@ -135,10 +130,9 @@ app.delete("/api/v1/products/:id", auth, async (req, res) => {
 app.post("/api/v1/products/:id/add-stock", auth, async (req, res) => {
   const schema = z.object({
     qty: z.number().int().positive(),
-    unitCost: z.number().int().nonnegative().optional(), // bisa kosong
+    unitCost: z.number().int().nonnegative().optional(),
     note: z.string().optional().nullable(),
   });
-
   try {
     const { qty, unitCost, note } = schema.parse(req.body);
     const productId = req.params.id;
@@ -171,7 +165,7 @@ app.post("/api/v1/products/:id/add-stock", auth, async (req, res) => {
   }
 });
 
-/* ================= CUSTOMERS ================= */
+/* ============== CUSTOMERS ============== */
 app.get("/api/v1/customers", auth, async (_req, res) => {
   const customers = await prisma.customer.findMany({
     orderBy: { createdAt: "desc" },
@@ -211,13 +205,13 @@ app.put("/api/v1/customers/:id", auth, async (req, res) => {
 app.delete("/api/v1/customers/:id", auth, async (req, res) => {
   try {
     await prisma.customer.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
   } catch (e) {
-    return res.status(400).json({ error: e.message });
+    res.status(400).json({ error: e.message });
   }
-  res.json({ ok: true });
 });
 
-/* ================= SALES / POS ================= */
+/* ============== SALES / POS ============== */
 app.post("/api/v1/sales", auth, async (req, res) => {
   const schema = z.object({
     customerId: z.string().optional().nullable(),
@@ -231,7 +225,6 @@ app.post("/api/v1/sales", auth, async (req, res) => {
 
   try {
     const payload = schema.parse(req.body);
-
     const ids = payload.items.map((i) => i.productId);
     const products = await prisma.product.findMany({
       where: { id: { in: ids } },
@@ -254,6 +247,7 @@ app.post("/api/v1/sales", auth, async (req, res) => {
         ? "Sebagian"
         : "Piutang";
 
+    // INV-YYYYMM-####
     const now = new Date();
     const prefix = `INV-${now.getFullYear()}${String(
       now.getMonth() + 1
@@ -333,7 +327,7 @@ app.get("/api/v1/sales", auth, async (req, res) => {
   res.json(sales);
 });
 
-/* ================= PAYMENTS ================= */
+/* ============== PAYMENTS ============== */
 app.post("/api/v1/payments", auth, async (req, res) => {
   const schema = z.object({
     saleId: z.string(),
@@ -372,8 +366,8 @@ app.post("/api/v1/payments", auth, async (req, res) => {
   }
 });
 
-/* ================= REPORTS ================= */
-/** Penjualan: default 30 hari, to = 23:59:59.999 */
+/* ============== REPORTS ============== */
+// Penjualan: default 30 hari, to = 23:59:59.999
 app.get("/api/v1/reports/sales", auth, async (req, res) => {
   try {
     const fromStr = (req.query.from || "").toString();
@@ -400,7 +394,7 @@ app.get("/api/v1/reports/sales", auth, async (req, res) => {
   }
 });
 
-/** Barang Masuk (Stock IN): ringkasan & detail */
+// Barang Masuk (Stock IN)
 app.get("/api/v1/reports/stock-in", auth, async (req, res) => {
   try {
     const fromStr = (req.query.from || "").toString();
@@ -442,6 +436,6 @@ app.get("/api/v1/reports/stock-in", auth, async (req, res) => {
   }
 });
 
-/* ================= START ================= */
+/* ============== START ============== */
 const port = process.env.PORT || 8080;
 app.listen(port, () => console.log("API running on :" + port));
