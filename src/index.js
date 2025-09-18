@@ -14,16 +14,18 @@ const app = express();
 // Pakai allow-all dulu supaya cepat pulih; nanti kita kunci lagi.
 app.use(
   cors({
-    origin: true, // echo origin -> Access-Control-Allow-Origin: <origin>
+    origin: true,
     credentials: false,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
     allowedHeaders: ["Content-Type", "Authorization"],
     optionsSuccessStatus: 204,
   })
 );
-app.options("*", cors());
 
-app.use(express.json());
+app.use((req, res, next) => {
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
 
 /* ============== Healthcheck ============== */
 app.get("/api/v1/health", (_req, res) => res.json({ ok: true }));
