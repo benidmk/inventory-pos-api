@@ -10,22 +10,22 @@ const { PrismaClient } = pkg;
 const prisma = new PrismaClient();
 const app = express();
 
-/* ============== CORS (allow all sementara) ============== */
-// Pakai allow-all dulu supaya cepat pulih; nanti kita kunci lagi.
+/* ============== CORS: allow-all sementara ============== */
 app.use(
   cors({
-    origin: true,
+    origin: true, // echo origin -> Access-Control-Allow-Origin
     credentials: false,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
     allowedHeaders: ["Content-Type", "Authorization"],
     optionsSuccessStatus: 204,
   })
 );
-
 app.use((req, res, next) => {
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
+
+app.use(express.json());
 
 /* ============== Healthcheck ============== */
 app.get("/api/v1/health", (_req, res) => res.json({ ok: true }));
@@ -33,41 +33,34 @@ app.get("/api/v1/health", (_req, res) => res.json({ ok: true }));
 /* ============== AUTH ============== */
 app.post("/api/v1/auth/login", (req, res) => {
   const raw = req.body?.password ?? "";
-  const input = String(raw).trim(); // buang spasi/enter tersembunyi
-
-  // Normalisasi ENV juga
+  const input = String(raw).trim(); // buang spasi/enter tak terlihat
   const ADMIN = String(process.env.ADMIN_PASSWORD ?? "").trim();
 
-  // Log aman (tanpa bocorin nilai)
+  // Log diagnostik aman
+  const toCodes = (s) =>
+    s
+      .split("")
+      .slice(0, 3)
+      .map((c) => c.charCodeAt(0));
   console.log("[LOGIN]", {
-    bodyLen: input.length,
-    envSet: !!ADMIN,
-    envLen: ADMIN.length,
+    inputLen: input.length,
+    adminLen: ADMIN.length,
+    inputFirstCodes: toCodes(input),
+    adminFirstCodes: toCodes(ADMIN),
   });
 
-  if (!input || input !== ADMIN) {
-    return res.status(401).json({ error: "Invalid password" });
-  }
   if (!process.env.JWT_SECRET) {
     return res
       .status(500)
       .json({ error: "Server misconfigured: JWT_SECRET missing" });
   }
+  if (!input || input !== ADMIN) {
+    return res.status(401).json({ error: "Invalid password" });
+  }
   const token = jwt.sign({ role: "admin" }, process.env.JWT_SECRET, {
     expiresIn: "12h",
   });
   res.json({ token });
-});
-
-app.get("/api/v1/_debug/env", (_req, res) => {
-  const ADMIN = String(process.env.ADMIN_PASSWORD ?? "");
-  const SECRET = String(process.env.JWT_SECRET ?? "");
-  res.json({
-    adminSet: ADMIN.length > 0,
-    adminLen: ADMIN.length,
-    secretSet: SECRET.length > 0,
-    secretLen: SECRET.length,
-  });
 });
 
 function auth(req, res, next) {
@@ -82,7 +75,7 @@ function auth(req, res, next) {
   }
 }
 
-/* ============== PRODUCTS ============== */
+/* ================= PRODUCTS ================= */
 app.get("/api/v1/products", auth, async (req, res) => {
   const q = (req.query.q || "").toString().toLowerCase();
   const list = await prisma.product.findMany({
@@ -142,7 +135,7 @@ app.delete("/api/v1/products/:id", auth, async (req, res) => {
   }
 });
 
-/** Tambah stok (barang masuk) — tidak mengubah costPrice/expiry produk */
+/** Tambah stok (barang masuk) — hanya tambah qty, simpan riwayat */
 app.post("/api/v1/products/:id/add-stock", auth, async (req, res) => {
   const schema = z.object({
     qty: z.number().int().positive(),
@@ -181,7 +174,7 @@ app.post("/api/v1/products/:id/add-stock", auth, async (req, res) => {
   }
 });
 
-/* ============== CUSTOMERS ============== */
+/* ================= CUSTOMERS ================= */
 app.get("/api/v1/customers", auth, async (_req, res) => {
   const customers = await prisma.customer.findMany({
     orderBy: { createdAt: "desc" },
@@ -227,7 +220,7 @@ app.delete("/api/v1/customers/:id", auth, async (req, res) => {
   }
 });
 
-/* ============== SALES / POS ============== */
+/* ================= SALES / POS ================= */
 app.post("/api/v1/sales", auth, async (req, res) => {
   const schema = z.object({
     customerId: z.string().optional().nullable(),
@@ -343,7 +336,7 @@ app.get("/api/v1/sales", auth, async (req, res) => {
   res.json(sales);
 });
 
-/* ============== PAYMENTS ============== */
+/* ================= PAYMENTS ================= */
 app.post("/api/v1/payments", auth, async (req, res) => {
   const schema = z.object({
     saleId: z.string(),
@@ -382,7 +375,7 @@ app.post("/api/v1/payments", auth, async (req, res) => {
   }
 });
 
-/* ============== REPORTS ============== */
+/* ================= REPORTS ================= */
 // Penjualan
 app.get("/api/v1/reports/sales", auth, async (req, res) => {
   try {
@@ -452,6 +445,6 @@ app.get("/api/v1/reports/stock-in", auth, async (req, res) => {
   }
 });
 
-/* ============== START ============== */
+/* ============== START SERVER ============== */
 const port = process.env.PORT || 8080;
 app.listen(port, () => console.log("API running on :" + port));
