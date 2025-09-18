@@ -281,10 +281,22 @@ app.post("/api/v1/payments", auth, async (req, res) => {
 
 // ============== REPORTS (ringkas) ==============
 app.get("/api/v1/reports/sales", auth, async (req, res) => {
-  const from = req.query.from
-    ? new Date(req.query.from)
-    : new Date("1970-01-01");
-  const to = req.query.to ? new Date(req.query.to) : new Date();
+  const fromStr = (req.query.from || "").toString();
+  const toStr = (req.query.to || "").toString();
+
+  const now = new Date();
+  // default: 30 hari terakhir
+  const defaultFrom = new Date(now);
+  defaultFrom.setDate(defaultFrom.getDate() - 30);
+  defaultFrom.setHours(0, 0, 0, 0);
+
+  // parse "YYYY-MM-DD"
+  const from = fromStr ? new Date(`${fromStr}T00:00:00.000Z`) : defaultFrom;
+
+  const to = toStr
+    ? new Date(`${toStr}T23:59:59.999Z`)
+    : new Date(now.setHours(23, 59, 59, 999));
+
   const list = await prisma.sale.findMany({
     where: { date: { gte: from, lte: to } },
     orderBy: { date: "desc" },
@@ -292,6 +304,3 @@ app.get("/api/v1/reports/sales", auth, async (req, res) => {
   const total = list.reduce((a, s) => a + s.grandTotal, 0);
   res.json({ total, list });
 });
-
-const port = process.env.PORT || 8080;
-app.listen(port, () => console.log("API running on :" + port));
