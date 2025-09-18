@@ -32,18 +32,20 @@ app.get("/api/v1/health", (_req, res) => res.json({ ok: true }));
 
 /* ============== AUTH ============== */
 app.post("/api/v1/auth/login", (req, res) => {
-  const { password } = req.body || {};
-  const ADMIN = (process.env.ADMIN_PASSWORD ?? "").trim();
-  const EXPECTED = ADMIN || "admin123"; // <-- fallback sementara
+  const raw = req.body?.password ?? "";
+  const input = String(raw).trim(); // buang spasi/enter tersembunyi
 
-  // log aman (tanpa bocorin password)
+  // Normalisasi ENV juga
+  const ADMIN = String(process.env.ADMIN_PASSWORD ?? "").trim();
+
+  // Log aman (tanpa bocorin nilai)
   console.log("[LOGIN]", {
-    bodyLen: (password || "").length,
+    bodyLen: input.length,
     envSet: !!ADMIN,
     envLen: ADMIN.length,
   });
 
-  if (!password || password !== EXPECTED) {
+  if (!input || input !== ADMIN) {
     return res.status(401).json({ error: "Invalid password" });
   }
   if (!process.env.JWT_SECRET) {
