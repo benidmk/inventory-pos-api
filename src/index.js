@@ -10,28 +10,19 @@ const { PrismaClient } = pkg;
 const prisma = new PrismaClient();
 const app = express();
 
-/* ============== CORS (whitelist Vercel + lokal) ============== */
-const allowedOrigins = ["https://bumdesma.vercel.app", "http://localhost:5173"];
-
+/* ============== CORS (allow all sementara) ============== */
+// Pakai allow-all dulu supaya cepat pulih; nanti kita kunci lagi.
 app.use(
   cors({
-    origin(origin, cb) {
-      // Allow tools tanpa Origin (curl/postman)
-      if (!origin) return cb(null, true);
-      if (allowedOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error("Not allowed by CORS"));
-    },
+    origin: true, // echo origin -> Access-Control-Allow-Origin: <origin>
+    credentials: false,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
     allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: false,
     optionsSuccessStatus: 204,
   })
 );
-
-// Preflight handler (OPTIONS)
 app.options("*", cors());
 
-/* ============== Body Parser ============== */
 app.use(express.json());
 
 /* ============== Healthcheck ============== */
@@ -367,7 +358,7 @@ app.post("/api/v1/payments", auth, async (req, res) => {
 });
 
 /* ============== REPORTS ============== */
-// Penjualan: default 30 hari, to = 23:59:59.999
+// Penjualan
 app.get("/api/v1/reports/sales", auth, async (req, res) => {
   try {
     const fromStr = (req.query.from || "").toString();
@@ -394,7 +385,7 @@ app.get("/api/v1/reports/sales", auth, async (req, res) => {
   }
 });
 
-// Barang Masuk (Stock IN)
+// Barang Masuk
 app.get("/api/v1/reports/stock-in", auth, async (req, res) => {
   try {
     const fromStr = (req.query.from || "").toString();
