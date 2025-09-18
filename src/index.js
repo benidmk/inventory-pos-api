@@ -1,4 +1,28 @@
 // src/index.js
+
+import cors from "cors";
+
+// whitelist origin produksi + lokal
+const allowedOrigins = ["https://bumdesma.vercel.app", "http://localhost:5173"];
+
+app.use(
+  cors({
+    origin(origin, cb) {
+      // allow non-browser tools (curl/postman) tanpa Origin
+      if (!origin) return cb(null, true);
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+      return cb(new Error("Not allowed by CORS"), false);
+    },
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: false, // kita tidak pakai cookie/sesi
+    optionsSuccessStatus: 204, // agar preflight aman
+  })
+);
+
+// pastikan preflight OPTIONS di-handle
+app.options("*", cors());
+
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
