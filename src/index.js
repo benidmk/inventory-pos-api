@@ -283,6 +283,89 @@ app.get("/api/v1/sales", auth, async (req, res) => {
   res.json(sales);
 });
 
+// Tambah stok barang (barang masuk)
+app.post("/api/v1/products/:id/add-stock", auth, async (req, res) => {
+  const schema = z.object({
+    qty: z.number().int().positive(),
+    unitCost: z.number().int().nonnegative().optional(), // boleh kosong
+    note: z.string().optional().nullable(),
+  });
+
+  try {
+    const { qty, unitCost, note } = schema.parse(req.body);
+    const productId = req.params.id;
+
+    // pastikan produk ada
+    const prod = await prisma.product.findUnique({ where: { id: productId } });
+    if (!prod) return res.status(404).json({ error: "Produk tidak ditemukan" });
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const p = await tx.product.update({
+        where: { id: productId },
+        data: { stockQty: { increment: qty } }, // hanya tambah stok
+      });
+      await tx.stockMovement.create({
+        data: {
+          productId,
+          type: "IN",
+          qty,
+          reason: "StockIn",
+          userId: "admin",
+          unitCost: typeof unitCost === "number" ? unitCost : null,
+          note: note ?? null,
+        },
+      });
+      return p;
+    });
+
+    res.json(updated);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Laporan barang masuk (stock-in)
+app.get("/api/v1/reports/stock-in", auth, async (req, res) => {
+  try {
+    const fromStr = (req.query.from || "").toString(); // 'YYYY-MM-DD'
+    const toStr = (req.query.to || "").toString();
+
+    const now = new Date();
+    const defaultFrom = new Date(now);
+    defaultFrom.setDate(defaultFrom.getDate() - 30);
+    defaultFrom.setHours(0, 0, 0, 0);
+
+    const from = fromStr ? new Date(`${fromStr}T00:00:00.000Z`) : defaultFrom;
+    const to = toStr
+      ? new Date(`${toStr}T23:59:59.999Z`)
+      : new Date(new Date().setHours(23, 59, 59, 999));
+
+    const list = await prisma.stockMovement.findMany({
+      where: { type: "IN", date: { gte: from, lte: to } },
+      include: { product: true },
+      orderBy: { date: "desc" },
+    });
+
+    const totalQty = list.reduce((a, m) => a + m.qty, 0);
+    const totalValue = list.reduce((a, m) => a + (m.unitCost ?? 0) * m.qty, 0);
+
+    const data = list.map((m) => ({
+      id: m.id,
+      date: m.date,
+      productId: m.productId,
+      productName: m.product.name,
+      qty: m.qty,
+      unitCost: m.unitCost ?? 0,
+      value: (m.unitCost ?? 0) * m.qty,
+      note: m.note || "",
+    }));
+
+    res.json({ totalQty, totalValue, list: data });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 /** ========== PAYMENTS ========== */
 app.post("/api/v1/payments", auth, async (req, res) => {
   const schema = z.object({
@@ -350,6 +433,48 @@ app.get("/api/v1/reports/sales", auth, async (req, res) => {
     });
     const total = list.reduce((a, s) => a + s.grandTotal, 0);
     res.json({ total, list });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Laporan barang masuk (stock-in)
+app.get("/api/v1/reports/stock-in", auth, async (req, res) => {
+  try {
+    const fromStr = (req.query.from || "").toString(); // 'YYYY-MM-DD'
+    const toStr = (req.query.to || "").toString();
+
+    const now = new Date();
+    const defaultFrom = new Date(now);
+    defaultFrom.setDate(defaultFrom.getDate() - 30);
+    defaultFrom.setHours(0, 0, 0, 0);
+
+    const from = fromStr ? new Date(`${fromStr}T00:00:00.000Z`) : defaultFrom;
+    const to = toStr
+      ? new Date(`${toStr}T23:59:59.999Z`)
+      : new Date(new Date().setHours(23, 59, 59, 999));
+
+    const list = await prisma.stockMovement.findMany({
+      where: { type: "IN", date: { gte: from, lte: to } },
+      include: { product: true },
+      orderBy: { date: "desc" },
+    });
+
+    const totalQty = list.reduce((a, m) => a + m.qty, 0);
+    const totalValue = list.reduce((a, m) => a + (m.unitCost ?? 0) * m.qty, 0);
+
+    const data = list.map((m) => ({
+      id: m.id,
+      date: m.date,
+      productId: m.productId,
+      productName: m.product.name,
+      qty: m.qty,
+      unitCost: m.unitCost ?? 0,
+      value: (m.unitCost ?? 0) * m.qty,
+      note: m.note || "",
+    }));
+
+    res.json({ totalQty, totalValue, list: data });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }

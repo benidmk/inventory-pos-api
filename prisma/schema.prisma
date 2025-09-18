@@ -82,9 +82,11 @@ model StockMovement {
   productId String
   type      String   // "IN" | "OUT" | "ADJUST"
   qty       Int
-  reason    String   // "Sale" | "Adjust" | ...
+  reason    String   // "Sale" | "StockIn" | "Adjust" | ...
   refId     String?
   date      DateTime @default(now())
   userId    String?
+  unitCost  Int?     // <— harga beli per unit saat barang masuk (opsional)
+  note      String?  // <— catatan opsional
   product   Product  @relation(fields: [productId], references: [id])
 }
