@@ -31,13 +31,30 @@ app.get("/api/v1/health", (_req, res) => res.json({ ok: true }));
 
 /* ================= AUTH ================= */
 app.post("/api/v1/auth/login", (req, res) => {
-  const { password } = req.body || {};
-  const ADMIN = (process.env.ADMIN_PASSWORD ?? "").trim();
-  if (!password || password !== ADMIN) {
-    return res.status(401).json({ error: "Invalid password" });
-  }
+  const raw = req.body?.password ?? "";
+  const input = String(raw).trim(); // buang spasi/enter tak terlihat
+  const ADMIN = String(process.env.ADMIN_PASSWORD ?? "").trim();
+
+  // Log diagnostik aman
+  const toCodes = (s) =>
+    s
+      .split("")
+      .slice(0, 3)
+      .map((c) => c.charCodeAt(0));
+  console.log("[LOGIN]", {
+    inputLen: input.length,
+    adminLen: ADMIN.length,
+    inputFirstCodes: toCodes(input),
+    adminFirstCodes: toCodes(ADMIN),
+  });
+
   if (!process.env.JWT_SECRET) {
-    return res.status(500).json({ error: "JWT_SECRET missing" });
+    return res
+      .status(500)
+      .json({ error: "Server misconfigured: JWT_SECRET missing" });
+  }
+  if (!input || input !== ADMIN) {
+    return res.status(401).json({ error: "Invalid password" });
   }
   const token = jwt.sign({ role: "admin" }, process.env.JWT_SECRET, {
     expiresIn: "12h",
