@@ -9,22 +9,20 @@ const { PrismaClient } = pkg;
 const prisma = new PrismaClient();
 const app = express();
 
-/** CORS whitelist */
-const allowedOrigins = ["https://bumdesma.vercel.app", "http://localhost:5173"];
+/* ============== CORS: allow-all sementara ============== */
 app.use(
   cors({
-    origin(origin, cb) {
-      if (!origin) return cb(null, true); // allow curl/postman
-      if (allowedOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error("Not allowed by CORS"), false);
-    },
+    origin: true, // echo origin -> Access-Control-Allow-Origin
+    credentials: false,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
     allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: false,
     optionsSuccessStatus: 204,
   })
 );
-app.options("*", cors());
+app.use((req, res, next) => {
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
 
 app.use(express.json());
 
