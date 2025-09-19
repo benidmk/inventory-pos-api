@@ -79,6 +79,7 @@ function auth(req, res, next) {
 app.get("/api/v1/products", auth, async (req, res) => {
   const q = (req.query.q || "").toString().toLowerCase();
   const list = await prisma.product.findMany({
+    where: { isActive: true }, // <— tampilkan hanya produk aktif
     orderBy: { createdAt: "desc" },
   });
   res.json(q ? list.filter((p) => p.name.toLowerCase().includes(q)) : list);
@@ -103,6 +104,7 @@ app.post("/api/v1/products", auth, async (req, res) => {
       data: {
         ...data,
         expiryDate: data.expiryDate ? new Date(data.expiryDate) : null,
+        isActive: true, // default aktif
       },
     });
     res.json(created);
@@ -128,7 +130,10 @@ app.put("/api/v1/products/:id", auth, async (req, res) => {
 
 app.delete("/api/v1/products/:id", auth, async (req, res) => {
   try {
-    await prisma.product.delete({ where: { id: req.params.id } });
+    await prisma.product.update({
+      where: { id: req.params.id },
+      data: { isActive: false }, // <— tandai non-aktif, bukan hard delete
+    });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
