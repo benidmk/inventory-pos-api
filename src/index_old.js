@@ -79,6 +79,7 @@ function auth(req, res, next) {
 app.get("/api/v1/products", auth, async (req, res) => {
   const q = (req.query.q || "").toString().toLowerCase();
   const list = await prisma.product.findMany({
+    where: { isActive: true }, // <— tampilkan hanya produk aktif
     orderBy: { createdAt: "desc" },
   });
   res.json(q ? list.filter((p) => p.name.toLowerCase().includes(q)) : list);
@@ -103,6 +104,7 @@ app.post("/api/v1/products", auth, async (req, res) => {
       data: {
         ...data,
         expiryDate: data.expiryDate ? new Date(data.expiryDate) : null,
+        isActive: true, // default aktif
       },
     });
     res.json(created);
@@ -128,7 +130,10 @@ app.put("/api/v1/products/:id", auth, async (req, res) => {
 
 app.delete("/api/v1/products/:id", auth, async (req, res) => {
   try {
-    await prisma.product.delete({ where: { id: req.params.id } });
+    await prisma.product.update({
+      where: { id: req.params.id },
+      data: { isActive: false }, // <— tandai non-aktif, bukan hard delete
+    });
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -442,6 +447,72 @@ app.get("/api/v1/reports/stock-in", auth, async (req, res) => {
     res.json({ totalQty, totalValue, list: data });
   } catch (e) {
     res.status(400).json({ error: e.message });
+  }
+});
+
+// DETAIL 1 INVOICE
+app.get("/api/v1/sales/:id/detail", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const sale = await prisma.sale.findUnique({
+      where: { id }, // id = String (cuid) sesuai schema kamu
+      include: {
+        customer: {
+          select: { id: true, name: true, phone: true, address: true },
+        },
+        items: {
+          include: {
+            product: {
+              select: { id: true, name: true, unit: true, expiryDate: true },
+            },
+          },
+        },
+        payments: {
+          select: {
+            id: true,
+            date: true,
+            amount: true,
+            method: true,
+            refNo: true,
+          },
+        },
+      },
+    });
+    if (!sale) return res.status(404).json({ error: "Sale not found" });
+
+    const items = sale.items.map((it) => ({
+      productId: it.productId,
+      productName: it.product?.name ?? "-",
+      unit: it.product?.unit ?? "-",
+      qty: it.qty,
+      unitPrice: it.unitPrice,
+      lineTotal: it.lineTotal,
+      expiryDate: it.product?.expiryDate ?? null,
+    }));
+    const paid = sale.payments.reduce((a, p) => a + p.amount, 0);
+
+    return res.json({
+      id: sale.id,
+      invoiceNo: sale.invoiceNo,
+      date: sale.date,
+      customer: sale.customer
+        ? {
+            id: sale.customer.id,
+            name: sale.customer.name,
+            phone: sale.customer.phone ?? null,
+            address: sale.customer.address ?? null,
+          }
+        : null,
+      note: sale.note ?? null,
+      grandTotal: sale.grandTotal,
+      amountPaid: paid,
+      paymentStatus: sale.paymentStatus,
+      items,
+      payments: sale.payments,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 

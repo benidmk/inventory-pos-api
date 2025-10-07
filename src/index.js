@@ -516,6 +516,74 @@ app.get("/api/v1/sales/:id/detail", auth, async (req, res) => {
   }
 });
 
+// ====== PROFIT (pendapatan - HPP) ======
+app.get("/api/v1/reports/profit", auth, async (req, res) => {
+  try {
+    const fromStr = (req.query.from || "").toString().trim();
+    const toStr = (req.query.to || "").toString().trim();
+
+    // Jika from/to kosong => mode all-time
+    const useRange = !!(fromStr && toStr);
+
+    let whereSaleItem = {};
+    if (useRange) {
+      const from = new Date(`${fromStr}T00:00:00.000Z`);
+      const to = new Date(`${toStr}T23:59:59.999Z`);
+      whereSaleItem = { sale: { date: { gte: from, lte: to } } };
+    }
+
+    // Ambil item penjualan sesuai filter (atau semua jika all-time)
+    const items = await prisma.saleItem.findMany({
+      where: whereSaleItem,
+      select: { qty: true, lineTotal: true, productId: true },
+    });
+
+    // Revenue = sum(lineTotal)
+    const revenue = items.reduce((a, it) => a + (it.lineTotal || 0), 0);
+
+    // Ambil costPrice per produk yang muncul di items
+    const pids = Array.from(new Set(items.map((i) => i.productId)));
+    const products = pids.length
+      ? await prisma.product.findMany({
+          where: { id: { in: pids } },
+          select: { id: true, costPrice: true },
+        })
+      : [];
+    const costMap = new Map(products.map((p) => [p.id, p.costPrice || 0]));
+
+    // COGS = sum(qty * costPrice sekarang) -> aproksimasi
+    const cogs = items.reduce((a, it) => {
+      const cp = costMap.get(it.productId) || 0;
+      return a + cp * it.qty;
+    }, 0);
+
+    const profit = revenue - cogs;
+
+    // Info periode (untuk label)
+    const agg = await prisma.sale.aggregate({
+      _min: { date: true },
+      _max: { date: true },
+    });
+
+    res.json({
+      mode: useRange ? "range" : "all-time",
+      range: useRange ? { from: fromStr, to: toStr } : null,
+      dataset: {
+        firstSaleAt: agg._min.date || null,
+        lastSaleAt: agg._max.date || null,
+        saleItems: items.length,
+        productsInvolved: pids.length,
+      },
+      revenue, // total penjualan (gross)
+      cogs, // HPP aproksimasi dari Product.costPrice
+      profit, // keuntungan kotor keseluruhan / periode
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(400).json({ error: e.message });
+  }
+});
+
 /* ============== START SERVER ============== */
 const port = process.env.PORT || 8080;
 app.listen(port, () => console.log("API running on :" + port));
