@@ -450,6 +450,72 @@ app.get("/api/v1/reports/stock-in", auth, async (req, res) => {
   }
 });
 
+// DETAIL 1 INVOICE
+app.get("/api/v1/sales/:id/detail", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const sale = await prisma.sale.findUnique({
+      where: { id }, // id = String (cuid) sesuai schema kamu
+      include: {
+        customer: {
+          select: { id: true, name: true, phone: true, address: true },
+        },
+        items: {
+          include: {
+            product: {
+              select: { id: true, name: true, unit: true, expiryDate: true },
+            },
+          },
+        },
+        payments: {
+          select: {
+            id: true,
+            date: true,
+            amount: true,
+            method: true,
+            refNo: true,
+          },
+        },
+      },
+    });
+    if (!sale) return res.status(404).json({ error: "Sale not found" });
+
+    const items = sale.items.map((it) => ({
+      productId: it.productId,
+      productName: it.product?.name ?? "-",
+      unit: it.product?.unit ?? "-",
+      qty: it.qty,
+      unitPrice: it.unitPrice,
+      lineTotal: it.lineTotal,
+      expiryDate: it.product?.expiryDate ?? null,
+    }));
+    const paid = sale.payments.reduce((a, p) => a + p.amount, 0);
+
+    return res.json({
+      id: sale.id,
+      invoiceNo: sale.invoiceNo,
+      date: sale.date,
+      customer: sale.customer
+        ? {
+            id: sale.customer.id,
+            name: sale.customer.name,
+            phone: sale.customer.phone ?? null,
+            address: sale.customer.address ?? null,
+          }
+        : null,
+      note: sale.note ?? null,
+      grandTotal: sale.grandTotal,
+      amountPaid: paid,
+      paymentStatus: sale.paymentStatus,
+      items,
+      payments: sale.payments,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 /* ============== START SERVER ============== */
 const port = process.env.PORT || 8080;
 app.listen(port, () => console.log("API running on :" + port));
