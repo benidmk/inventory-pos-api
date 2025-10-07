@@ -584,6 +584,40 @@ app.get("/api/v1/reports/profit", auth, async (req, res) => {
   }
 });
 
+// ====== TOTAL PENJUALAN (all-time / range) ======
+app.get("/api/v1/reports/total-sales", auth, async (req, res) => {
+  try {
+    const fromStr = (req.query.from || "").toString().trim();
+    const toStr = (req.query.to || "").toString().trim();
+    const useRange = !!(fromStr && toStr);
+
+    let where = {};
+    if (useRange) {
+      const from = new Date(`${fromStr}T00:00:00.000Z`);
+      const to = new Date(`${toStr}T23:59:59.999Z`);
+      where = { date: { gte: from, lte: to } };
+    }
+
+    const agg = await prisma.sale.aggregate({
+      where,
+      _sum: { grandTotal: true },
+      _min: { date: true },
+      _max: { date: true },
+    });
+
+    res.json({
+      mode: useRange ? "range" : "all-time",
+      range: useRange ? { from: fromStr, to: toStr } : null,
+      total: agg._sum.grandTotal || 0,
+      firstSaleAt: agg._min.date || null,
+      lastSaleAt: agg._max.date || null,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(400).json({ error: e.message });
+  }
+});
+
 /* ============== START SERVER ============== */
 const port = process.env.PORT || 8080;
 app.listen(port, () => console.log("API running on :" + port));
