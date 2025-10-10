@@ -253,6 +253,7 @@ app.post("/api/v1/sales", auth, async (req, res) => {
       const unitPrice = p.sellPrice;
       return { ...i, unitPrice, lineTotal: unitPrice * i.qty };
     });
+
     const grandTotal = calcItems.reduce((a, i) => a + i.lineTotal, 0);
     const status =
       payload.amountPaid >= grandTotal
@@ -261,17 +262,26 @@ app.post("/api/v1/sales", auth, async (req, res) => {
         ? "Sebagian"
         : "Piutang";
 
-    // INV-YYYYMM-####
     const now = new Date();
-    const prefix = `INV-${now.getFullYear()}${String(
-      now.getMonth() + 1
-    ).padStart(2, "0")}-`;
-    const count = await prisma.sale.count({
-      where: { invoiceNo: { startsWith: prefix } },
-    });
-    const invoiceNo = `${prefix}${String(count + 1).padStart(4, "0")}`;
+    const period = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(
+      2,
+      "0"
+    )}`;
+    const prefix = `INV-${period}-`;
 
+    // ==== TRANSAKSI ATOMIK DENGAN COUNTER ====
     const result = await prisma.$transaction(async (tx) => {
+      // 1) Ambil nomor urut secara atomik per period (YYYYMM)
+      const counter = await tx.invoiceCounter.upsert({
+        where: { period },
+        create: { period, lastNumber: 1 },
+        update: { lastNumber: { increment: 1 } },
+      });
+      // catatan: pada path update, nilai yang dikembalikan sudah hasil increment
+      const seq = counter.lastNumber;
+      const invoiceNo = `${prefix}${String(seq).padStart(4, "0")}`;
+
+      // 2) Buat sale dengan invoiceNo unik tersebut
       const sale = await tx.sale.create({
         data: {
           invoiceNo,
@@ -291,6 +301,7 @@ app.post("/api/v1/sales", auth, async (req, res) => {
         },
       });
 
+      // 3) Update stok + catat movement
       for (const i of calcItems) {
         await tx.product.update({
           where: { id: i.productId },
@@ -308,6 +319,7 @@ app.post("/api/v1/sales", auth, async (req, res) => {
         });
       }
 
+      // 4) Simpan pembayaran jika ada
       if (payload.amountPaid > 0) {
         await tx.payment.create({
           data: {
@@ -323,6 +335,12 @@ app.post("/api/v1/sales", auth, async (req, res) => {
 
     res.json(result);
   } catch (e) {
+    // Tangani unique error kalau pun terjadi (fallback)
+    if (e?.code === "P2002" && e?.meta?.target?.includes("invoiceNo")) {
+      return res
+        .status(409)
+        .json({ error: "Nomor invoice bentrok, silakan coba lagi." });
+    }
     res.status(400).json({ error: e.message });
   }
 });

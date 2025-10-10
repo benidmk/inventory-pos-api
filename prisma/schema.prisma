@@ -90,3 +90,10 @@ model StockMovement {
   note      String?  // <— catatan opsional
   product   Product  @relation(fields: [productId], references: [id])
 }
+
+model InvoiceCounter {
+  id         String   @id @default(cuid())
+  period     String   @unique  // contoh: "202510" (YYYYMM)
+  lastNumber Int      @default(0)
+  updatedAt  DateTime @updatedAt
+}
