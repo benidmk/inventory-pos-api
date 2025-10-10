@@ -237,52 +237,36 @@ app.post("/api/v1/sales", auth, async (req, res) => {
     method: z.enum(["Tunai", "Transfer", "QRIS"]).default("Tunai"),
   });
 
-  // === Helper: status pembayaran
   const calcStatus = (paid, total) =>
     paid >= total ? "Lunas" : paid > 0 ? "Sebagian" : "Piutang";
 
-  // === Helper: ambil nomor invoice aman (lock per-periode + increment atomik)
-  async function nextInvoiceNoLocked(tx) {
+  // Helper: ambil nomor invoice dari PostgreSQL sequence (anti-duplicate)
+  async function nextInvoiceNoSeq(tx) {
     const now = new Date();
     const period = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(
       2,
       "0"
     )}`; // YYYYMM
     const prefix = `INV-${period}-`;
-    const lockKey = `inv:${period}`;
 
-    // 1) Kunci transaksi di level DB (lepas otomatis saat commit/rollback)
-    await tx.$executeRawUnsafe(
-      `SELECT pg_advisory_xact_lock(hashtext($1))`,
-      lockKey
+    // 1) Pastikan sequence ada (idempotent)
+    await tx.$executeRawUnsafe(`CREATE SEQUENCE IF NOT EXISTS inv_global_seq`);
+
+    // 2) Ambil nomor baru (non-transactional, tidak rollback)
+    const rows = await tx.$queryRawUnsafe(
+      `SELECT nextval('inv_global_seq') AS seq`
     );
+    const seq = Array.isArray(rows) ? rows[0].seq : rows.seq;
 
-    // 2) Pastikan baris period ada (pakai Prisma upsert—aman karena sudah di-lock)
-    await tx.invoiceCounter.upsert({
-      where: { period },
-      create: { period, lastNumber: 0 },
-      update: {},
-    });
-
-    // 3) Increment atomik + ambil nilai terbaru
-    const row = await tx.$queryRawUnsafe(
-      `UPDATE "InvoiceCounter"
-         SET "lastNumber" = "lastNumber" + 1,
-             "updatedAt"  = now()
-       WHERE "period" = $1
-     RETURNING "lastNumber"`,
-      period
-    );
-
-    const seq = Array.isArray(row) ? row[0].lastNumber : row.lastNumber;
-    const invoiceNo = `${prefix}${String(seq).padStart(4, "0")}`;
+    // 3) Format jadi INV-YYYYMM-000123
+    const invoiceNo = `${prefix}${String(seq).padStart(6, "0")}`;
     return { invoiceNo };
   }
 
   try {
     const payload = schema.parse(req.body);
 
-    // Ambil produk & validasi stok
+    // Validasi produk & stok
     const ids = payload.items.map((i) => i.productId);
     const products = await prisma.product.findMany({
       where: { id: { in: ids } },
@@ -301,68 +285,65 @@ app.post("/api/v1/sales", auth, async (req, res) => {
     const grandTotal = calcItems.reduce((a, i) => a + i.lineTotal, 0);
     const status = calcStatus(payload.amountPaid, grandTotal);
 
-    // === Transaksi utama (isolasi kuat + nomor invoice aman)
-    const sale = await prisma.$transaction(
-      async (tx) => {
-        const { invoiceNo } = await nextInvoiceNoLocked(tx);
+    // Transaksi utama
+    const sale = await prisma.$transaction(async (tx) => {
+      const { invoiceNo } = await nextInvoiceNoSeq(tx);
 
-        const s = await tx.sale.create({
+      const s = await tx.sale.create({
+        data: {
+          invoiceNo,
+          customerId: payload.customerId ?? null,
+          note: payload.note ?? null,
+          grandTotal,
+          amountPaid: payload.amountPaid,
+          paymentStatus: status,
+          items: {
+            create: calcItems.map((i) => ({
+              productId: i.productId,
+              qty: i.qty,
+              unitPrice: i.unitPrice,
+              lineTotal: i.lineTotal,
+            })),
+          },
+        },
+      });
+
+      // Stok & movement
+      for (const i of calcItems) {
+        await tx.product.update({
+          where: { id: i.productId },
+          data: { stockQty: { decrement: i.qty } },
+        });
+        await tx.stockMovement.create({
           data: {
-            invoiceNo,
-            customerId: payload.customerId ?? null,
-            note: payload.note ?? null,
-            grandTotal,
-            amountPaid: payload.amountPaid,
-            paymentStatus: status,
-            items: {
-              create: calcItems.map((i) => ({
-                productId: i.productId,
-                qty: i.qty,
-                unitPrice: i.unitPrice,
-                lineTotal: i.lineTotal,
-              })),
-            },
+            productId: i.productId,
+            type: "OUT",
+            qty: i.qty,
+            reason: "Sale",
+            refId: s.id,
+            userId: "admin",
           },
         });
+      }
 
-        // Kurangi stok & catat movement
-        for (const i of calcItems) {
-          await tx.product.update({
-            where: { id: i.productId },
-            data: { stockQty: { decrement: i.qty } },
-          });
-          await tx.stockMovement.create({
-            data: {
-              productId: i.productId,
-              type: "OUT",
-              qty: i.qty,
-              reason: "Sale",
-              refId: s.id,
-              userId: "admin",
-            },
-          });
-        }
+      // Pembayaran awal
+      if (payload.amountPaid > 0) {
+        await tx.payment.create({
+          data: {
+            saleId: s.id,
+            amount: payload.amountPaid,
+            method: payload.method,
+          },
+        });
+      }
 
-        // Pembayaran awal (jika ada)
-        if (payload.amountPaid > 0) {
-          await tx.payment.create({
-            data: {
-              saleId: s.id,
-              amount: payload.amountPaid,
-              method: payload.method,
-            },
-          });
-        }
-
-        return s;
-      },
-      { isolationLevel: "Serializable" }
-    );
+      return s;
+    });
 
     res.json(sale);
   } catch (e) {
-    // fallback pesan unik jika tetap ada bentrok (harusnya tidak terjadi dengan lock)
     if (e?.code === "P2002" && e?.meta?.target?.includes("invoiceNo")) {
+      // Dengan sequence, ini mestinya tidak terjadi; fallback pesan ramah
       return res
         .status(409)
         .json({ error: "Nomor invoice bentrok, silakan coba lagi." });
