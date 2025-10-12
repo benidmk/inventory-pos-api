@@ -97,3 +97,29 @@ model InvoiceCounter {
   lastNumber Int      @default(0)
   updatedAt  DateTime @updatedAt
 }
+
+enum Role {
+  ADMIN
+  VIEWER
+}
+
+model User {
+  id        String   @id @default(cuid())
+  username  String   @unique
+  name      String
+  password  String   // bcrypt hash
+  role      Role     @default(VIEWER)
+  createdAt DateTime @default(now())
+  audits    LoginAudit[]
+}
+
+model LoginAudit {
+  id        String   @id @default(cuid())
+  userId    String?
+  username  String
+  role      Role?
+  ip        String?
+  userAgent String?
+  at        DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id])
+}
