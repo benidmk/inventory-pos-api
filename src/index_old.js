@@ -237,8 +237,36 @@ app.post("/api/v1/sales", auth, async (req, res) => {
     method: z.enum(["Tunai", "Transfer", "QRIS"]).default("Tunai"),
   });
 
+  const calcStatus = (paid, total) =>
+    paid >= total ? "Lunas" : paid > 0 ? "Sebagian" : "Piutang";
+
+  // Helper: ambil nomor invoice dari PostgreSQL sequence (anti-duplicate)
+  async function nextInvoiceNoSeq(tx) {
+    const now = new Date();
+    const period = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(
+      2,
+      "0"
+    )}`; // YYYYMM
+    const prefix = `INV-${period}-`;
+
+    // 1) Pastikan sequence ada (idempotent)
+    await tx.$executeRawUnsafe(`CREATE SEQUENCE IF NOT EXISTS inv_global_seq`);
+
+    // 2) Ambil nomor baru (non-transactional, tidak rollback)
+    const rows = await tx.$queryRawUnsafe(
+      `SELECT nextval('inv_global_seq') AS seq`
+    );
+    const seq = Array.isArray(rows) ? rows[0].seq : rows.seq;
+
+    // 3) Format jadi INV-YYYYMM-000123
+    const invoiceNo = `${prefix}${String(seq).padStart(6, "0")}`;
+    return { invoiceNo };
+  }
+
   try {
     const payload = schema.parse(req.body);
+
+    // Validasi produk & stok
     const ids = payload.items.map((i) => i.productId);
     const products = await prisma.product.findMany({
       where: { id: { in: ids } },
@@ -253,26 +281,15 @@ app.post("/api/v1/sales", auth, async (req, res) => {
       const unitPrice = p.sellPrice;
       return { ...i, unitPrice, lineTotal: unitPrice * i.qty };
     });
+
     const grandTotal = calcItems.reduce((a, i) => a + i.lineTotal, 0);
-    const status =
-      payload.amountPaid >= grandTotal
-        ? "Lunas"
-        : payload.amountPaid > 0
-        ? "Sebagian"
-        : "Piutang";
+    const status = calcStatus(payload.amountPaid, grandTotal);
 
-    // INV-YYYYMM-####
-    const now = new Date();
-    const prefix = `INV-${now.getFullYear()}${String(
-      now.getMonth() + 1
-    ).padStart(2, "0")}-`;
-    const count = await prisma.sale.count({
-      where: { invoiceNo: { startsWith: prefix } },
-    });
-    const invoiceNo = `${prefix}${String(count + 1).padStart(4, "0")}`;
+    // Transaksi utama
+    const sale = await prisma.$transaction(async (tx) => {
+      const { invoiceNo } = await nextInvoiceNoSeq(tx);
 
-    const result = await prisma.$transaction(async (tx) => {
-      const sale = await tx.sale.create({
+      const s = await tx.sale.create({
         data: {
           invoiceNo,
           customerId: payload.customerId ?? null,
@@ -291,6 +308,7 @@ app.post("/api/v1/sales", auth, async (req, res) => {
         },
       });
 
+      // Stok & movement
       for (const i of calcItems) {
         await tx.product.update({
           where: { id: i.productId },
@@ -302,27 +320,34 @@ app.post("/api/v1/sales", auth, async (req, res) => {
             type: "OUT",
             qty: i.qty,
             reason: "Sale",
-            refId: sale.id,
+            refId: s.id,
             userId: "admin",
           },
         });
       }
 
+      // Pembayaran awal
       if (payload.amountPaid > 0) {
         await tx.payment.create({
           data: {
-            saleId: sale.id,
+            saleId: s.id,
             amount: payload.amountPaid,
             method: payload.method,
           },
         });
       }
 
-      return sale;
+      return s;
     });
 
-    res.json(result);
+    res.json(sale);
   } catch (e) {
+    if (e?.code === "P2002" && e?.meta?.target?.includes("invoiceNo")) {
+      // Dengan sequence, ini mestinya tidak terjadi; fallback pesan ramah
+      return res
+        .status(409)
+        .json({ error: "Nomor invoice bentrok, silakan coba lagi." });
+    }
     res.status(400).json({ error: e.message });
   }
 });
