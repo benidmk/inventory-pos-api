@@ -1,0 +1,9 @@
+name = "inventory-pos-api"
+main = "src/worker.js"
+compatibility_date = "2025-10-15"   # pakai tanggal hari ini / terbaru
+
+[vars]
+# Kalau mau batasi CORS, ganti "*" dengan origin FE kamu (mis: "https://pos.example.com")
+CORS_ORIGIN = "*"
+
+# DATABASE_URL & JWT_SECRET akan diisi sebagai "secrets" (bukan di file ini)

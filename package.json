@@ -4,11 +4,15 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node src/index.js",
     "migrate:deploy": "prisma migrate deploy",
     "postinstall": "prisma generate",
-    "seed:admin": "node scripts/seed-admin.js"
+
+    "cf:dev": "wrangler dev",
+    "cf:deploy": "wrangler deploy",
+    "cf:login": "wrangler login",
+    "cf:secret:db": "wrangler secret put DATABASE_URL",
+    "cf:secret:jwt": "wrangler secret put JWT_SECRET"
   },
   "keywords": [],
   "author": "",
@@ -16,16 +20,21 @@
   "description": "",
   "devDependencies": {
     "nodemon": "^3.1.10",
-    "prisma": "^6.16.2"
+    "prisma": "^6.16.2",
+    "wrangler": "^4.43.0"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.0.2",
     "@prisma/client": "^6.16.2",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
     "dotenv": "^17.2.2",
     "express": "^5.1.0",
+    "hono": "^4.9.12",
+    "jose": "^6.1.0",
     "jsonwebtoken": "^9.0.2",
     "zod": "^4.1.9"
-  }
+  },
+  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
 }
